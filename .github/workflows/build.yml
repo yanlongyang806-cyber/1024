@@ -2,20 +2,22 @@ name: Build and Test DLL
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main   # 当推送到 main 分支时触发
   pull_request:
-    branches: [ main ]
+    branches:
+      - main   # 当合并 PR 到 main 时触发
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-latest  # 使用 Windows 环境构建
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4  # 使用最新版本
 
-      - name: Set up Visual Studio
-        uses: microsoft/setup-msbuild@v1
+      - name: Set up MSBuild (includes CMake)
+        uses: microsoft/setup-msbuild@v2
 
       - name: Configure CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -S .
@@ -23,8 +25,9 @@ jobs:
       - name: Build with CMake
         run: cmake --build build --config Release
 
+      # ✅ 上传编译好的 DLL 文件（使用 v4）
       - name: Upload DLL artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: SmartExceptionHandler-DLL
           path: build/output/Release/*.dll
