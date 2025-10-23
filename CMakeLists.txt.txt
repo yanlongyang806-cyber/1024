@@ -1,40 +1,29 @@
-cmake_minimum_required(VERSION 3.10)
+name: Build and Test DLL
 
-# 设置项目名称
-project(SmartExceptionHandler)
+on:
+  push:
+    branches:
+      - main  # 仅在推送到 main 分支时触发构建
+  pull_request:
+    branches:
+      - main  # 仅在 PR 合并到 main 分支时触发构建
 
-# 设置 C++ 标准
-set(CMAKE_CXX_STANDARD 14)
+jobs:
+  build:
+    runs-on: windows-latest  # 使用 Windows 环境进行构建
 
-# 设置输出目录
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/output)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/output)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/output)
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2  # 检出代码到构建环境
 
-# 指定编译器
-set(CMAKE_C_COMPILER "clang")
-set(CMAKE_CXX_COMPILER "clang++")
+      - name: Set up CMake
+        uses: actions/setup-cmake@v2  # 使用最新的 CMake 动作
 
-# 包含源代码文件夹
-include_directories(${CMAKE_SOURCE_DIR}/src)
+      - name: Set up Visual Studio
+        uses: microsoft/setup-msbuild@v1  # 设置 MSBuild 和 Visual Studio 编译器
 
-# 手动指定源文件路径
-set(SOURCES
-    ${CMAKE_SOURCE_DIR}/src/main.cpp
-    ${CMAKE_SOURCE_DIR}/src/ExceptionHandler.cpp
-)
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -S ${{ github.workspace }}  # 使用 GitHub workspace 确保路径正确
 
-# 输出 SOURCES 变量，确保文件路径正确
-message("SOURCES = ${SOURCES}")
-
-# 创建共享库（DLL）
-add_library(SmartExceptionHandler SHARED ${SOURCES})
-
-# 设置输出文件名
-set_target_properties(SmartExceptionHandler PROPERTIES OUTPUT_NAME "SmartExceptionHandler")
-
-# 如果需要调试时启用更多日志，可以设置 Debug 类型
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    message("Building in Debug mode")
-endif()
-
+      - name: Build with CMake
+        run: cmake --build build --config Release  # 使用 CMake 构建项目
