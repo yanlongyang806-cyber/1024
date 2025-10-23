@@ -17,7 +17,7 @@ include_directories(${CMAKE_SOURCE_DIR}/src)
 # 使用 GLOB 自动收集所有 cpp 文件
 file(GLOB SOURCES ${CMAKE_SOURCE_DIR}/src/*.cpp)
 
-# 输出 SOURCES 变量，确保文件路径正确
+# 输出 SOURCES 变量，确保文件路径正
 message("SOURCES = ${SOURCES}")
 
 # 创建共享库（DLL）
