@@ -14,11 +14,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/output)
 # 包含源代码目录
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
-# 手动指定源文件路径
-set(SOURCES
-    ${CMAKE_SOURCE_DIR}/src/main.cpp
-    ${CMAKE_SOURCE_DIR}/src/ExceptionHandler.cpp
-)
+# 使用 GLOB 自动收集所有 cpp 文件
+file(GLOB SOURCES ${CMAKE_SOURCE_DIR}/src/*.cpp)
 
 # 输出 SOURCES 变量，确保文件路径正确
 message("SOURCES = ${SOURCES}")
