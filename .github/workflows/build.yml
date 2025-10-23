@@ -1,40 +1,37 @@
-name: Build VEHGuardian (Windows x64)
+name: Build VEHGuardian DLL
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ main, master ]
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
+
     steps:
-      - name: Checkout
+      # 1️⃣ 检出仓库源码
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ✅ 用官方 setup-cmake
+      # 2️⃣ 安装 CMake
       - name: Setup CMake
-        uses: jwlawson/actions-setup-cmake@v2
-        with:
-          cmake-version: '3.29.0'
+        uses: lukka/get-cmake@v3
 
-      - name: Configure (Visual Studio 2022 x64)
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build (Release)
-        run: cmake --build build --config Release --target VEHGuardian -v:minimal
-
-      - name: Package artifact
+      # 3️⃣ 配置 CMake（生成工程）
+      - name: Configure CMake
         run: |
-          mkdir -p artifacts
-          copy build\bin\Release\VEHGuardian.dll artifacts\VEHGuardian.dll
-          copy build\bin\Release\VEHGuardian.pdb artifacts\VEHGuardian.pdb >nul 2>nul || echo "no pdb"
-          powershell -Command "Compress-Archive -Path artifacts\* -DestinationPath artifacts\VEHGuardian_artifact.zip -Force"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 
-      - name: Upload artifact
+      # 4️⃣ 编译项目
+      - name: Build project
+        run: |
+          cmake --build build --config Release --parallel
+
+      # 5️⃣ 上传编译好的 DLL 作为构建产物
+      - name: Upload VEHGuardian.dll
         uses: actions/upload-artifact@v4
         with:
-          name: VEHGuardian-artifact
-          path: artifacts/VEHGuardian_artifact.zip
+          name: VEHGuardian-DLL
+          path: build/bin/Release/VEHGuardian.dll
