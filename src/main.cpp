@@ -2,138 +2,92 @@
 #include <iostream>
 #include <fstream>
 #include <ctime>
+#include <unordered_map>
 #include <unordered_set>
-#include <vector>
 #include <string>
 #include <sstream>
 #include <mutex>
+#include <thread>
 
-// 线程安全日志
-static std::mutex g_log_mutex;
-static void WriteLog(const std::string& message) {
-    std::lock_guard<std::mutex> lk(g_log_mutex);
-    std::ofstream log("error_log.txt", std::ios::app);
-    if (!log.is_open()) return;
+static std::mutex logMutex;  // 保证多线程日志安全
+static std::unordered_map<DWORD, std::unordered_set<DWORD64>> threadCrashMap; // 每线程独立记录崩溃地址
 
-    // 获取当前时间
+// 🧠 获取时间字符串
+std::string GetTimestamp() {
     std::time_t now = std::time(nullptr);
-    std::tm localtm;
-    localtime_s(&localtm, &now);
-
-    char timebuf[64];
-    std::snprintf(timebuf, sizeof(timebuf), "%04d-%02d-%02d %02d:%02d:%02d",
-                  localtm.tm_year + 1900, localtm.tm_mon + 1, localtm.tm_mday,
-                  localtm.tm_hour, localtm.tm_min, localtm.tm_sec);
-
-    log << "[" << timebuf << "] " << message << std::endl;
+    std::tm tm{};
+    localtime_s(&tm, &now);
+    char buf[64];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
+    return std::string(buf);
 }
 
-// 存储已知崩溃地址（进程级）
-static std::unordered_set<uint64_t> knownCrashAddresses;
-static std::mutex g_known_mutex; // 保护 knownCrashAddresses
-
-// 辅助：把地址/数字格式化为十六进制字符串
-static std::string ToHex(uint64_t v) {
-    std::ostringstream oss;
-    oss << "0x" << std::hex << std::uppercase << v;
-    return oss.str();
+// ✍️ 线程安全写日志
+void WriteLog(const std::string& message) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream log("error_log.txt", std::ios::app);
+    if (log.is_open()) {
+        log << "[" << GetTimestamp() << "] [TID:" << GetCurrentThreadId() << "] " << message << std::endl;
+    }
 }
 
-// VEH 异常处理程序（更安全的实现）
+// 🚨 智能异常处理程序
 LONG CALLBACK SmartVehHandler(EXCEPTION_POINTERS* ExceptionInfo) {
-    if (!ExceptionInfo || !ExceptionInfo->ExceptionRecord || !ExceptionInfo->ContextRecord) {
-        return EXCEPTION_CONTINUE_SEARCH;
+    if (!ExceptionInfo || !ExceptionInfo->ExceptionRecord) return EXCEPTION_CONTINUE_SEARCH;
+
+    DWORD64 crashAddr = reinterpret_cast<DWORD64>(ExceptionInfo->ExceptionRecord->ExceptionAddress);
+    DWORD threadId = GetCurrentThreadId();
+
+    auto& crashSet = threadCrashMap[threadId];
+    std::ostringstream oss;
+    oss << "⚠️ Exception 0x" << std::hex << ExceptionInfo->ExceptionRecord->ExceptionCode
+        << " at address 0x" << crashAddr;
+    WriteLog(oss.str());
+
+    // 防止重复处理同一线程相同异常
+    if (crashSet.count(crashAddr)) {
+        WriteLog("🔁 Repeated crash detected. Skipping this instruction.");
+        return EXCEPTION_CONTINUE_EXECUTION;
     }
+    crashSet.insert(crashAddr);
 
-    const DWORD code = ExceptionInfo->ExceptionRecord->ExceptionCode;
-    const uint64_t crashAddr = reinterpret_cast<uint64_t>(ExceptionInfo->ExceptionRecord->ExceptionAddress);
-
-    // 记录异常地址（用十六进制）
-    WriteLog(std::string("Exception caught at address: ") + ToHex(crashAddr));
-
-    {
-        std::lock_guard<std::mutex> lk(g_known_mutex);
-        if (knownCrashAddresses.find(crashAddr) != knownCrashAddresses.end()) {
-            WriteLog(std::string("Crash address ") + ToHex(crashAddr) + " already encountered, skipping...");
-            return EXCEPTION_CONTINUE_EXECUTION;
-        }
-        // 首次记录
-        knownCrashAddresses.insert(crashAddr);
-    }
-
-    // 处理不同类型的异常
-    switch (code) {
+    // 智能修复逻辑
+    switch (ExceptionInfo->ExceptionRecord->ExceptionCode) {
         case EXCEPTION_ACCESS_VIOLATION:
-            WriteLog("Access Violation occurred, attempting to skip...");
-            break;
         case EXCEPTION_ILLEGAL_INSTRUCTION:
-            WriteLog("Illegal Instruction encountered, attempting to skip...");
-            break;
+            WriteLog("💡 Attempting instruction pointer skip (2 bytes forward).");
+        #if defined(_M_X64)
+            ExceptionInfo->ContextRecord->Rip += 2;
+        #elif defined(_M_IX86)
+            ExceptionInfo->ContextRecord->Eip += 2;
+        #endif
+            return EXCEPTION_CONTINUE_EXECUTION;
+
         case EXCEPTION_STACK_OVERFLOW:
-            WriteLog("Stack Overflow encountered.");
-            return EXCEPTION_CONTINUE_SEARCH; // 不尝试跳过
-        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
-            WriteLog("Array Bounds Exceeded encountered.");
+            WriteLog("❗ Stack overflow detected. Cannot safely recover.");
             return EXCEPTION_CONTINUE_SEARCH;
-        default: {
-            std::ostringstream oss;
-            oss << "Unhandled exception encountered. Code: 0x" << std::hex << code;
-            WriteLog(oss.str());
+
+        default:
+            WriteLog("❔ Unhandled exception. Forwarding to next handler.");
             return EXCEPTION_CONTINUE_SEARCH;
-        }
     }
-
-    // 尝试跳过出错指令：默认跳过 2 字节（可在配置里调整）
-#if defined(_M_X64) || defined(__x86_64__)
-    CONTEXT& ctx = *ExceptionInfo->ContextRecord;
-    uint64_t oldRip = ctx.Rip;
-    const uint32_t advance = 2; // 默认前进字节数，若需精确请用配置表按地址设置
-    ctx.Rip += advance;
-    {
-        std::ostringstream oss;
-        oss << "Advancing RIP from 0x" << std::hex << oldRip << " to 0x" << std::hex << ctx.Rip
-            << " (advance=" << std::dec << advance << ")";
-        WriteLog(oss.str());
-    }
-#else
-    // x86
-    CONTEXT& ctx = *ExceptionInfo->ContextRecord;
-    #if defined(_M_IX86)
-        uint32_t oldEip = ctx.Eip;
-        const uint32_t advance = 2;
-        ctx.Eip += advance;
-        WriteLog("Advanced EIP to continue");
-    #else
-        WriteLog("Unsupported architecture for automatic RIP/EIP advance");
-        return EXCEPTION_CONTINUE_SEARCH;
-    #endif
-#endif
-
-    return EXCEPTION_CONTINUE_EXECUTION;
 }
 
-// DLL 初始化（更安全：也处理卸载）
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
-    static PVOID vehHandle = nullptr;
+// 🧩 DLL 初始化与卸载
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
     switch (reason) {
-    case DLL_PROCESS_ATTACH:
-        DisableThreadLibraryCalls(hModule); // 性能优化
-        vehHandle = AddVectoredExceptionHandler(1, SmartVehHandler);
-        if (vehHandle) {
-            WriteLog("SmartExceptionHandler DLL injected successfully. VEH installed.");
-        } else {
-            WriteLog("SmartExceptionHandler DLL injected but VEH installation failed.");
-        }
-        break;
-    case DLL_PROCESS_DETACH:
-        if (vehHandle) {
-            RemoveVectoredExceptionHandler(vehHandle);
-            vehHandle = nullptr;
-            WriteLog("VEH removed on DLL detach.");
-        } else {
-            WriteLog("DLL detach: no VEH to remove.");
-        }
-        break;
+        case DLL_PROCESS_ATTACH:
+            AddVectoredExceptionHandler(1, SmartVehHandler);
+            WriteLog("✅ SmartExceptionHandler initialized.");
+            break;
+
+        case DLL_THREAD_DETACH:
+            threadCrashMap.erase(GetCurrentThreadId());
+            break;
+
+        case DLL_PROCESS_DETACH:
+            WriteLog("🔚 SmartExceptionHandler shutting down.");
+            break;
     }
     return TRUE;
 }
