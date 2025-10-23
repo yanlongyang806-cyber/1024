@@ -15,21 +15,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ 安装 CMake
+      # 2️⃣ 安装最新版本的 CMake（官方推荐 action）
       - name: Setup CMake
-        uses: lukka/get-cmake@v3
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.29.3'   # 可改为你想用的版本
 
-      # 3️⃣ 配置 CMake（生成工程）
-      - name: Configure CMake
-        run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+      # 3️⃣ 确认 CMake 已安装
+      - name: Verify CMake
+        run: cmake --version
 
-      # 4️⃣ 编译项目
-      - name: Build project
-        run: |
-          cmake --build build --config Release --parallel
+      # 4️⃣ 生成工程 (Visual Studio 2022, x64)
+      - name: Configure project
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 
-      # 5️⃣ 上传编译好的 DLL 作为构建产物
+      # 5️⃣ 编译 DLL
+      - name: Build DLL
+        run: cmake --build build --config Release --parallel
+
+      # 6️⃣ 上传编译结果（artifact）
       - name: Upload VEHGuardian.dll
         uses: actions/upload-artifact@v4
         with:
