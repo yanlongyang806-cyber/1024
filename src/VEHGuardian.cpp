@@ -67,9 +67,19 @@ static void WriteMiniDump(EXCEPTION_POINTERS* pep, const wchar_t* suffix)
     mei.ExceptionPointers = pep;
     mei.ClientPointers = FALSE;
 
-    BOOL ok = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), hFile,
-                                MiniDumpWithFullMemory | MiniDumpWithHandleData | MiniDumpWithThreadInfo,
-                                (pep ? &mei : nullptr), nullptr, nullptr);
+    BOOL ok = MiniDumpWriteDump(
+        GetCurrentProcess(),
+        GetCurrentProcessId(),
+        hFile,
+        static_cast<MINIDUMP_TYPE>(  // ✅ FIX: 强制转换为枚举类型
+            MiniDumpWithFullMemory |
+            MiniDumpWithHandleData |
+            MiniDumpWithThreadInfo),
+        (pep ? &mei : nullptr),
+        nullptr,
+        nullptr
+    );
+
     if (!ok) {
         Log(L"MiniDumpWriteDump failed: %u", GetLastError());
     } else {
@@ -83,10 +93,7 @@ static void WriteMiniDump(EXCEPTION_POINTERS* pep, const wchar_t* suffix)
 static bool TryRecoverFromAccessViolation(CONTEXT* ctx)
 {
 #ifdef _M_X64
-    // Advance RIP by 1..8 bytes fallible heuristic.
-    // Safer approach would be to disassemble; omitted for simplicity.
     ULONG64 rip = ctx->Rip;
-    // try skipping 1 and 2 bytes as a conservative attempt
     ctx->Rip = rip + 1;
     Log(L"TryRecoverFromAccessViolation: advanced RIP +1 (0x%llx -> 0x%llx)", rip, ctx->Rip);
     return true;
@@ -101,20 +108,15 @@ static LONG WINAPI GuardianVEH(PEXCEPTION_POINTERS ep)
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     Log(L"VEH invoked: code=0x%08X addr=0x%p", code, ep->ExceptionRecord->ExceptionAddress);
 
-    // Always attempt to write a dump (best-effort). If exception pointers null, write without.
     __try {
         WriteMiniDump(ep, L"veh");
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        // ignore
-    }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-    // If stack cookie / failfast: do NOT attempt to continue
     if (code == 0xC0000409 /*STATUS_STACK_BUFFER_OVERRUN*/ || code == 0xDEADDEAD) {
         Log(L"VEH: failfast-like exception (0x%08X) - cannot recover", code);
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    // Access violation: attempt recovery
     if (code == EXCEPTION_ACCESS_VIOLATION) {
         CONTEXT* ctx = ep->ContextRecord;
         if (TryRecoverFromAccessViolation(ctx)) {
@@ -123,11 +125,10 @@ static LONG WINAPI GuardianVEH(PEXCEPTION_POINTERS ep)
         }
     }
 
-    // Illegal instruction: attempt skip
     if (code == EXCEPTION_ILLEGAL_INSTRUCTION) {
 #ifdef _M_X64
         CONTEXT* ctx = ep->ContextRecord;
-        ctx->Rip += 1; // heuristic
+        ctx->Rip += 1;
         Log(L"VEH: illegal instruction - advanced RIP");
         return EXCEPTION_CONTINUE_EXECUTION;
 #else
@@ -135,7 +136,6 @@ static LONG WINAPI GuardianVEH(PEXCEPTION_POINTERS ep)
 #endif
     }
 
-    // Fallback: log and continue search (let system handle)
     Log(L"VEH: unhandled exception code=0x%08X -> CONTINUE_SEARCH", code);
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -145,13 +145,9 @@ static LONG WINAPI GuardianUnhandledFilter(EXCEPTION_POINTERS* ep)
 {
     Log(L"UnhandledExceptionFilter invoked: code=0x%08X", ep->ExceptionRecord->ExceptionCode);
     __try { WriteMiniDump(ep, L"unhandled"); } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    // Try to allow process continuation? Returning EXCEPTION_EXECUTE_HANDLER will terminate.
-    // Best is to return EXCEPTION_CONTINUE_SEARCH to let default handler run.
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-// watchdog: monitors process health and tries to restart key routines if possible.
-// Here: simple periodic heartbeat log; user can extend to restart threads/services.
 static void WatchdogLoop()
 {
     Log(L"Watchdog thread started");
@@ -159,24 +155,17 @@ static void WatchdogLoop()
     while (g_running.load()) {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         tick++;
-        // write heartbeat
         Log(L"Watchdog heartbeat %d", tick);
-        // Optionally: check main thread liveness (cooperative)
         if (g_mainThreadId != 0) {
-            // get thread handle if not present
             if (!g_mainThreadHandle) {
                 HANDLE th = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, g_mainThreadId);
-                if (th) {
-                    g_mainThreadHandle = th;
-                }
+                if (th) g_mainThreadHandle = th;
             }
-            // we could QueryThreadCycleTime or similar; for now just log existence
             if (g_mainThreadHandle) {
                 DWORD exitCode = 0;
                 if (GetExitCodeThread(g_mainThreadHandle, &exitCode)) {
                     if (exitCode != STILL_ACTIVE) {
                         Log(L"Watchdog: main thread not active (exit code=%u)", exitCode);
-                        // option: attempt action
                     }
                 }
             }
@@ -185,11 +174,8 @@ static void WatchdogLoop()
     Log(L"Watchdog thread exiting");
 }
 
-// helper to get a thread id likely to be main thread: enumerate threads and pick one owning the main module's entry region.
-// This is heuristic and optional.
 static DWORD FindLikelyMainThreadId()
 {
-    // naive: use current thread (the injection thread assumed run inside loader)
     return GetCurrentThreadId();
 }
 
@@ -198,20 +184,15 @@ extern "C" __declspec(dllexport) void VG_EnableLogging()
     Log(L"VG_EnableLogging called");
 }
 
-// Start/stop
 static void StartGuardian()
 {
     if (g_running.load()) return;
     g_running.store(true);
-    // register VEH (first)
     g_vehHandle = AddVectoredExceptionHandler(1, GuardianVEH);
     SetUnhandledExceptionFilter(GuardianUnhandledFilter);
     Log(L"Registered VEH & UnhandledExceptionFilter (handle=%p)", g_vehHandle);
-    // find likely main thread
     g_mainThreadId = FindLikelyMainThreadId();
     Log(L"Likely main thread id: %u", g_mainThreadId);
-
-    // start watchdog
     g_watchdogThread = std::thread(WatchdogLoop);
 }
 
@@ -232,7 +213,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
         DisableThreadLibraryCalls(hModule);
-        // ensure directories
         CreateDirectoryW(L"C:\\temp", NULL);
         CreateDirectoryW(g_dumpFolder, NULL);
         Log(L"VEHGuardian DLL loaded");
