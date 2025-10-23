@@ -3,27 +3,26 @@ name: Build and Test DLL
 on:
   push:
     branches:
-      - main  # 仅在推送到 main 分支时触发构建
+      - main
   pull_request:
     branches:
-      - main  # 仅在 PR 合并到 main 分支时触发构建
+      - main
 
 jobs:
   build:
-    runs-on: windows-latest  # 使用 Windows 环境进行构建
+    runs-on: windows-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2  # 检出代码到构建环境
+        uses: actions/checkout@v2
 
-      - name: Set up CMake
-        uses: actions/setup-cmake@v2  # 使用最新版的 CMake 动作
-
-      - name: Set up Visual Studio
-        uses: microsoft/setup-msbuild@v1  # 设置 MSBuild 和 Visual Studio 编译器
+      - name: Set up MSBuild (including CMake)
+        uses: microsoft/setup-msbuild@v1
+        with:
+          vs-version: 'latest'  # 使用最新版本的 Visual Studio
 
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -S .  # 配置 CMake，指定构建目录和构建类型
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -S .
 
       - name: Build with CMake
-        run: cmake --build build --config Release  # 使用 CMake 构建项目
+        run: cmake --build build --config Release
