@@ -14,8 +14,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ✅ 用官方 setup-cmake
       - name: Setup CMake
-        uses: lukka/get-cmake@v4
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.29.0'
 
       - name: Configure (Visual Studio 2022 x64)
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
@@ -29,6 +32,7 @@ jobs:
           copy build\bin\Release\VEHGuardian.dll artifacts\VEHGuardian.dll
           copy build\bin\Release\VEHGuardian.pdb artifacts\VEHGuardian.pdb >nul 2>nul || echo "no pdb"
           powershell -Command "Compress-Archive -Path artifacts\* -DestinationPath artifacts\VEHGuardian_artifact.zip -Force"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
